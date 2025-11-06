@@ -1,0 +1,7 @@
+"startup.obj",
+"main.obj",
+"A96L116_adc.obj" 
+TO "PID_test" 
+RAMSIZE(256) 
+CODE( 0X0000-0X3FFF )
+XDATA( 0X0000-0X01FF )

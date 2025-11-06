@@ -1,0 +1,424 @@
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 1   
+
+
+C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
+OBJECT MODULE PLACED IN main.OBJ
+COMPILER INVOKED BY: C:\Users\compro\AppData\Local\Keil_v5\C51\BIN\C51.EXE main.c LARGE OPTIMIZE(8,SPEED) BROWSE DEBUG O
+                    -BJECTEXTEND TABS(2)
+
+line level    source
+
+   1          //**
+   2          //*******************************************************************************
+   3          //* @file main.c
+   4          //* @author ABOV R&D Division
+   5          //* @brief Main program
+   6          //*
+   7          //* Copyright 2022 ABOV Semiconductor Co.,Ltd. All rights reserved.
+   8          //*
+   9          //* This file is licensed under terms that are found in the LICENSE file
+  10          //* located at Document directory.
+  11          //* If this file is delivered or shared without applicable license terms,
+  12          //* the terms of the BSD-3-Clause license shall be applied.
+  13          //* Reference: https://opensource.org/licenses/BSD-3-Clause
+  14          //*******************************************************************************
+  15          //======================================================
+  16          // Main program routine
+  17          // - Device name  : A96L116
+  18          // - Package type : 20TSSOP
+  19          // Generated    : Thu, Nov 06, 2025 (23:46:24)
+  20          //======================================================
+  21          // MAIN is used for XDATA variable : V1.041.00 ~
+  22          #define   MAIN  1 // Do not delete this line
+  23          
+  24          #include  "A96L116.h"
+  25          #include    "A96L116_adc.h"
+  26          #include  "func_def.h"
+  27          
+  28          /*
+  29          P0.2 : PWM OUT0
+  30          P0.3 : PWM_INPUT
+  31          */
+  32          
+  33          //typedef unsigned char uint8_t;
+  34          //typedef unsigned short uint16_t;
+  35          //typedef unsigned long uint32_t;
+  36          
+  37          volatile uint32_t t_cap_duty = 0;
+  38          volatile uint8_t capture_ready = 0;
+  39          
+  40          uint32_t capture_cnt = 0;
+  41          bit event_flag;
+  42          
+  43          #define ADC_BUFFER_SIZE     4
+  44          
+  45          uint16_t avg_data = 0;
+  46          uint16_t adc_data[ADC_BUFFER_SIZE];
+  47          
+  48          void LPUART_SendChar(unsigned char ch);
+  49          void LPUART_SendStr(const char* str);
+  50          void LPUART_SendNum(unsigned long num);
+  51          
+  52          void delay_us(unsigned long us)  
+  53          {
+  54   1          unsigned long i;
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 2   
+
+  55   1          for(i = 0; i < us; i++)
+  56   1          {
+  57   2              NOP;  
+  58   2          }
+  59   1      }
+  60          
+  61          void main()
+  62          {
+  63   1        uint8_t i = 0;
+  64   1      
+  65   1        GLOBAL_INTERRUPT_DIS();
+  66   1        port_init();      // initialize ports
+  67   1        clock_init();     // initialize operation clock
+  68   1        ADC_init();       // initialize A/D convertor
+  69   1        ADC_start(7);
+  70   1        ExINT_init();     // initialize external interrupt
+  71   1        //LPUART_init();    // initialize LPUART
+  72   1      #if 1 
+  73   1        Timer0_init();    // initialize Timer0
+  74   1        Timer1_init();    // initialize Timer1
+  75   1        Timer2_init();    // initialize Timer2
+  76   1      #endif  
+  77   1        GLOBAL_INTERRUPT_EN();
+  78   1      
+  79   1        //T1CRH |= 0x80;
+  80   1        
+  81   1        // TODO: add your main code here
+  82   1        while(1)
+  83   1        {
+  84   2          avg_data = 0;
+  85   2              ADC_GetDataWithInterrupt(adc_data, ADC_BUFFER_SIZE);    
+  86   2             
+  87   2              for(i = 0; i < ADC_BUFFER_SIZE; i++)
+  88   2              {  
+  89   3                  avg_data += adc_data[i];
+  90   3              }
+  91   2              avg_data /= ADC_BUFFER_SIZE;
+  92   2          
+  93   2          LPUART_SendNum((unsigned long)avg_data);
+  94   2              LPUART_SendChar(0x0D);
+  95   2              LPUART_SendChar(0x0A);
+  96   2              delay_us(1000);
+  97   2        #if 0 
+                  if(event_flag)
+                  {
+                    event_flag = 0;
+                    LPUART_SendNum((unsigned long)t_cap_duty);
+                    LPUART_SendChar(0x0D);
+                    LPUART_SendChar(0x0A);
+                  }
+                #endif
+ 106   2        }
+ 107   1      }
+ 108          
+ 109          //======================================================
+ 110          // Interrupt routines
+ 111          //======================================================
+ 112          
+ 113          void INT_Ext11() interrupt 1
+ 114          {
+ 115   1        // External interrupt 11
+ 116   1        // TODO: add your code here
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 3   
+
+ 117   1        uint16_t current_capture;
+ 118   1        volatile uint16_t rising_time = 0;
+ 119   1        volatile uint16_t falling_time = 0;
+ 120   1      
+ 121   1        current_capture = T1CAPL;
+ 122   1        current_capture |= (T1CAPH << 8);
+ 123   1      
+ 124   1        if (P0 & (1<<3))
+ 125   1        {
+ 126   2          rising_time = current_capture;
+ 127   2          capture_cnt = 0;
+ 128   2          capture_ready = 0;
+ 129   2        }
+ 130   1        else
+ 131   1        {
+ 132   2          falling_time = current_capture;
+ 133   2          if(falling_time >= rising_time)
+ 134   2          {
+ 135   3            capture_cnt = falling_time - rising_time;
+ 136   3          }
+ 137   2          else
+ 138   2          {
+ 139   3            //capture_cnt = (39999 - rising_time) + falling_time;
+ 140   3            capture_cnt = (0xFFFF - rising_time) + falling_time;
+ 141   3          }
+ 142   2          t_cap_duty = capture_cnt / 2;
+ 143   2          event_flag = 1;
+ 144   2        }
+ 145   1        EIFLAG1 &= ~(1<<2);
+ 146   1      }
+ 147          
+ 148          void INT_Timer0() interrupt 12
+ 149          {
+ 150   1        // Timer0 interrupt
+ 151   1        // TODO: add your code here
+ 152   1      }
+ 153          
+ 154          void INT_Timer1() interrupt 13
+ 155          {
+ 156   1        // Timer1 interrupt
+ 157   1        // TODO: add your code here
+ 158   1        if(capture_ready == 0)
+ 159   1        {
+ 160   2          capture_cnt += 0x10000;
+ 161   2        }
+ 162   1      }
+ 163          
+ 164          void INT_Timer2() interrupt 14
+ 165          {
+ 166   1        // Timer1 interrupt
+ 167   1        // TODO: add your code here
+ 168   1      }
+ 169          
+ 170          #if 0
+              void INT_ADC() interrupt 18
+              {
+                // ADC interrupt
+                // TODO: add your code here
+              }
+              #endif
+ 177          
+ 178          //======================================================
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 4   
+
+ 179          // Peripheral setting routines
+ 180          //======================================================
+ 181          #if 0
+              unsigned int ADC_read()
+              {
+                // read A/D convertor
+                unsigned int adcVal;
+                
+                while(!(ADCCRL & 0x10));  // wait ADC busy
+                adcVal = ADCDRH << 8; // read ADC high
+                adcVal |= ADCDRL; // read ADC low
+                ADCCRL &= ~0x80;  // disable ADC
+                return  adcVal;
+              }
+              #endif
+ 194          
+ 195          void ADC_init()
+ 196          {
+ 197   1        // initialize A/D convertor
+ 198   1        PPCLKEN0 |= 0x40; // Enable clock for ADC
+ 199   1        ADCCRL = 0x00;    // setting
+ 200   1        ADCCRH = 0x0E;    // trigger source, alignment, frequency
+ 201   1        IE3 |= 0x01;      // enable ADC interrupt
+ 202   1      }
+ 203          
+ 204          void ADC_start(unsigned char ch)
+ 205          {
+ 206   1        // start A/D convertor
+ 207   1        ADCCRL |= 0x80;   // enable ADC
+ 208   1        ADCCRL = (ADCCRL & 0xf0) | (ch & 0x0f); // select channel
+ 209   1        ADCCRL |= 0x40;   // start ADC
+ 210   1      }
+ 211          
+ 212          void ExINT_init()
+ 213          {
+ 214   1        // initialize external interrupt
+ 215   1        EIPOL2L = 0x0C;   // edge : external INT.10 ~ 12
+ 216   1        IE |= 0x02;       // Enable Ext.INT 10 ~ 12
+ 217   1      }
+ 218          
+ 219          #if 0
+              void LPUART_init()
+              {
+                // initialize LPUART
+                PPCLKEN2 |= 0x80; // Enable clock for LPUART
+              
+                LPUT0CR0 = 0x06;  // Control 0
+                LPUT0CR1 = 0x0D;  // Control 1
+              
+                // Set DE pin : Disabled
+                LPUT0CR2 = 0x00;  // Active level start time (0.006500ms)
+                LPUT0CR3 = 0x00;  // Active level finish time (0.006500ms)
+                LPUT0CR4 = 0x00;  // Control 4
+              
+                // Set communication
+                // - Source clock : fx
+                // - Baudrate : 9600
+                // - Data bit count : 8
+                // - Stop bit count : 1
+                // - Parity : No
+                // - Oversampling : 16
+                LPUT0BDR = 0x67;  // Baudrate
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 5   
+
+                LPUT0BCPH = 0x80; // Bit compensation High
+                LPUT0BCPL = 0x49; // Bit compensation Low
+                LPUT0RTDRH = 0xFF;  // Rx time out High (6815.744000ms)
+                LPUT0RTDRL = 0xFF;  // Rx time out Low
+                LPUT0RCDR = 0x00; // Rx character detection data
+                LPUT0DLY = 0x00;  // Tx delay time (0.000000ms)
+              }
+              
+              void LPUART_SendChar(unsigned char ch)
+              {
+                  LPUT0TDR = ch;
+              }
+              
+              void LPUART_SendStr(const char* str)
+              {
+                while(*str != '\0')
+                {
+                  LPUART_SendChar(*str);
+                  delay_us(100);
+                  str++;
+                }
+              }
+              
+              void LPUART_SendNum(unsigned long num)
+              {
+                char buffer[12];
+                int i = 0;
+              
+                if(num == 0)
+                {
+                  LPUART_SendChar('0');
+                  return;
+                }
+              
+                while(num > 0)
+                {
+                  buffer[i++] = (num % 10) + '0';
+                  num /= 10;
+                }
+              
+                while(i > 0)
+                {
+                  LPUART_SendChar(buffer[--i]);
+                  delay_us(100);
+                }
+              }
+              #endif
+ 288          
+ 289          void Timer0_init()
+ 290          {
+ 291   1        // initialize Timer0
+ 292   1        PPCLKEN1 |= 0x01; // Enable clock for Timer0
+ 293   1      
+ 294   1        // 16bit PWM0, period = 20.000000mS ( 50.000000Hz )
+ 295   1        //     PWM duty = 50.000000%
+ 296   1        T0CRH = 0x30;     // PWM setting High, repeat mode
+ 297   1        T0CRL = 0x20;     // PWM setting Low
+ 298   1        T0BDRH = 0x4E;    // duty High
+ 299   1        T0BDRL = 0x1F;    // duty Low
+ 300   1        T0ADRH = 0x9C;    // period count High
+ 301   1        T0ADRL = 0x3F;    // period count Low
+ 302   1        //T0CRL = 0x08;   // disable Timer reload signal
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 6   
+
+ 303   1        IE2 |= 0x01;      // Enable Timer0 interrupt
+ 304   1      
+ 305   1        T0CRH |= 0x80;    // enable counter
+ 306   1      }
+ 307          
+ 308          void Timer1_init()
+ 309          {
+ 310   1        // initialize Timer1
+ 311   1        PPCLKEN1 |= 0x02; // Enable clock for Timer1
+ 312   1      
+ 313   1        // 16bit capture1, period = 20.000000mS
+ 314   1        T1CRH = 0x10;     // capture setting High
+ 315   1        T1CRL = 0x60;     // capture setting Low
+ 316   1        T1ADRH = 0x9C;    // period count High
+ 317   1        T1ADRL = 0x3F;    // period count Low
+ 318   1        //T1CRL = 0x08;   // disable Timer reload signal
+ 319   1        IE2 |= 0x02;      // Enable Timer1 interrupt
+ 320   1      
+ 321   1        T1CRH |= 0x80;    // enable counter
+ 322   1      }
+ 323          
+ 324          void Timer2_init()
+ 325          {
+ 326   1        // initialize Timer2
+ 327   1        PPCLKEN1 |= 0x04; // Enable clock for Timer2
+ 328   1      
+ 329   1        // 16bit PWM2, period = 20.000000mS ( 50.000000Hz )
+ 330   1        //     PWM duty = 50.000000%
+ 331   1        T2CRH = 0x30;     // PWM setting High, repeat mode
+ 332   1        T2CRL = 0x60;     // PWM setting Low
+ 333   1        T2BDRH = 0x4E;    // duty High
+ 334   1        T2BDRL = 0x1F;    // duty Low
+ 335   1        T2ADRH = 0x9C;    // period count High
+ 336   1        T2ADRL = 0x3F;    // period count Low
+ 337   1        //T2CRL = 0x08;   // disable Timer reload signal
+ 338   1        IE2 |= 0x04;      // Enable Timer2 interrupt
+ 339   1      
+ 340   1        T2CRH |= 0x80;    // enable counter
+ 341   1      }
+ 342          
+ 343          void clock_init()
+ 344          {
+ 345   1        // HFIRC clock (16.000000MHz)
+ 346   1        unsigned char tmp;  // variable for HFIRC
+ 347   1      
+ 348   1        tmp = OSCCR;      // get default
+ 349   1        tmp &= ~(0x07 << 3);  // clear divider
+ 350   1        tmp |= 0x28;      // set divider
+ 351   1        OSCCR = tmp;      // Set HFIRC
+ 352   1        SCCR = 0x00;      // Use HFIRC
+ 353   1      }
+ 354          
+ 355          void port_init()
+ 356          {
+ 357   1        // initialize ports
+ 358   1        // Initialize P0x ports
+ 359   1        PPCLKEN0 |= 0x01; // Enable clock for P0x ports
+ 360   1        P0PU = 0x00;      // pullup
+ 361   1        P0OD = 0x00;      // open drain
+ 362   1        P0IOH = 0xAA;     // direction High
+ 363   1        P0IOL = 0x2A;     // direction Low
+ 364   1        P0DB = 0x00;      // bit7~6 = debounce clock
+C51 COMPILER V9.60.7.0   MAIN                                                              11/07/2025 00:40:49 PAGE 7   
+
+ 365   1        P0 = 0x00;        // port initial value
+ 366   1        P0FSRH = 0x18;    // P0 selection High
+ 367   1        P0FSRL = 0x10;    // P0 selection Low
+ 368   1      
+ 369   1        // Initialize P1x ports
+ 370   1        PPCLKEN0 |= 0x02; // Enable clock for P1x ports
+ 371   1        P1PU = 0x00;      // pullup
+ 372   1        P1OD = 0x00;      // open drain
+ 373   1        P1IOH = 0xAA;     // direction High
+ 374   1        P1IOL = 0xAA;     // direction Low
+ 375   1        P1DB = 0x00;      // debounce
+ 376   1        P1 = 0x00;        // port initial value
+ 377   1        P1FSRH = 0x00;    // P1 selection High
+ 378   1        P1FSRL = 0x00;    // P1 selection Low
+ 379   1      
+ 380   1        // Initialize P2x ports
+ 381   1        PPCLKEN0 |= 0x04; // Enable clock for P2x ports
+ 382   1        P2PU = 0x00;      // pullup
+ 383   1        P2OD = 0x00;      // open drain
+ 384   1        P2IOL = 0xAA;     // direction Low
+ 385   1        P2 = 0x00;        // port initial value
+ 386   1        P2FSRL = 0x00;    // P2 selection Low
+ 387   1      }
+ 388          
+
+
+MODULE INFORMATION:   STATIC OVERLAYABLE
+   CODE SIZE        =    778    ----
+   CONSTANT SIZE    =   ----    ----
+   XDATA SIZE       =     19      13
+   PDATA SIZE       =   ----    ----
+   DATA SIZE        =   ----    ----
+   IDATA SIZE       =   ----    ----
+   BIT SIZE         =      1    ----
+END OF MODULE INFORMATION.
+
+
+C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
