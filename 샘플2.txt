@@ -1,0 +1,469 @@
+//**
+//*******************************************************************************
+//* @file main.c
+//* @author ABOV R&D Division
+//* @brief Main program with PID Position Control
+//*******************************************************************************
+#define		MAIN	1
+
+#include	"A96L116.h"
+#include  "A96L116_adc.h"
+#include	"func_def.h"
+
+#define PWM_NO1     0
+#define ADC_BUFFER_SIZE     10
+#define ADC_MAIN_PROC	 1
+#define PWM_MAIN_PROC	 1
+#define UART_MAIN_PROC	 0
+
+#define SERVO_PERIOD 40000
+#define SERVO_PULSE_MIN     900
+#define SERVO_PULSE_CENTER  1500
+#define SERVO_PULSE_MAX     2100
+
+#define ADC_MIN	 163
+#define ADC_MAX	 3918
+
+// PID 게인 (작게 시작)
+#define KP  15      // Kp = 1.5
+#define KI  1       // Ki = 0.1
+#define KD  8       // Kd = 0.8
+#define SCALE 10
+
+// 목표 도달 판정
+#define POSITION_TOLERANCE 25   // ADC 오차 ±25 이내면 도달로 판정
+#define STOP_COUNT_LIMIT 5      // 5회 연속 범위 내 있으면 정지
+
+uint16_t avg_data = 0;
+uint16_t adc_data[ADC_BUFFER_SIZE];
+uint32_t capture_cnt, t_cap_duty;
+bit pwm_start_flag = 0;
+
+uint16_t target_adc = 2040;
+uint16_t output_pulse = SERVO_PULSE_CENTER;
+
+int16_t error = 0;
+int16_t prev_error = 0;
+int32_t integral = 0;
+
+uint8_t position_reached = 0;  // 목표 도달 플래그
+uint8_t stop_counter = 0;      // 정지 카운터
+
+void LPUART_SendChar(unsigned char ch);
+void LPUART_SendNum(unsigned long num);
+void LPUART_SendStr(const char* str);
+void delay_us(unsigned long us);
+void set_servo_us(uint8_t pwm_no, uint16_t pulse_us);
+uint16_t Timer1_GetCaptureValue(void);
+void Timer0_SetPPGDutyCounter(uint16_t count);
+void Timer0_SetPPGPeriodCounter(uint16_t count);
+uint16_t pwm_to_adc(uint16_t pwm_us);
+int16_t pid_compute(uint16_t target, uint16_t current);
+
+void delay_us(unsigned long us)  
+{
+    unsigned long i;
+    for(i = 0; i < us; i++) NOP;
+}
+
+void set_servo_us(uint8_t pwm_no, uint16_t pulse_us)
+{
+    uint16_t duty_cnt;
+    
+    if(pulse_us < SERVO_PULSE_MIN) pulse_us = SERVO_PULSE_MIN;
+    if(pulse_us > SERVO_PULSE_MAX) pulse_us = SERVO_PULSE_MAX;
+    
+    duty_cnt = pulse_us * 2;
+    
+    if(pwm_no == PWM_NO1)
+    {
+        Timer0_SetPPGPeriodCounter(SERVO_PERIOD);
+        Timer0_SetPPGDutyCounter(duty_cnt);
+    }
+}
+
+// PWM(us)을 ADC 값으로 변환
+uint16_t pwm_to_adc(uint16_t pwm_us)
+{
+    uint32_t temp;
+    
+    if(pwm_us < SERVO_PULSE_MIN) pwm_us = SERVO_PULSE_MIN;
+    if(pwm_us > SERVO_PULSE_MAX) pwm_us = SERVO_PULSE_MAX;
+    
+    // (pwm - 900) * (3918 - 163) / (2100 - 900) + 163
+    temp = (uint32_t)(pwm_us - SERVO_PULSE_MIN) * (ADC_MAX - ADC_MIN);
+    temp /= (SERVO_PULSE_MAX - SERVO_PULSE_MIN);
+    
+    return (uint16_t)(temp + ADC_MIN);
+}
+
+// PID 제어
+int16_t pid_compute(uint16_t target, uint16_t current)
+{
+    int16_t derivative;
+    int32_t output;
+    
+    error = (int16_t)target - (int16_t)current;
+    
+    // 적분
+    integral += error;
+    
+    // Anti-windup
+    if(integral > 2000) integral = 2000;
+    if(integral < -2000) integral = -2000;
+    
+    // 미분
+    derivative = error - prev_error;
+    prev_error = error;
+    
+    // PID 출력
+    output = ((int32_t)KP * error + (int32_t)KI * integral + (int32_t)KD * derivative) / SCALE;
+    
+    // 출력 제한
+    if(output > 30) output = 30;
+    if(output < -30) output = -30;
+    
+    return (int16_t)output;
+}
+
+void main()
+{
+    uint8_t i = 0;
+    int16_t pid_output;
+    int32_t temp_pulse;
+    uint16_t control_cnt = 0;
+    
+    GLOBAL_INTERRUPT_DIS();
+    port_init();
+    clock_init();
+    ADC_init();
+    ADC_start(7);
+    ExINT_init();
+#if UART_MAIN_PROC	
+    LPUART_init();
+#endif	
+    Timer0_init();
+    Timer1_init();
+    Timer2_init();
+    GLOBAL_INTERRUPT_EN();
+    
+    P1 |= (1 << 1);
+    P1 &= ~(1 << 2);
+    
+    // 초기 위치 읽기
+    delay_us(10000);
+    ADC_GetDataWithInterrupt(adc_data, ADC_BUFFER_SIZE);
+    avg_data = 0;
+    for(i = 0; i < ADC_BUFFER_SIZE; i++)
+    {
+        avg_data += adc_data[i];
+    }
+    avg_data /= ADC_BUFFER_SIZE;
+    target_adc = avg_data;  // 현재 위치를 목표로
+    
+    set_servo_us(PWM_NO1, SERVO_PULSE_CENTER);
+    position_reached = 1;  // 초기에는 정지 상태
+    
+#if UART_MAIN_PROC
+    LPUART_SendStr("START\r\n");
+#endif
+    
+    while(1)
+    {
+#if ADC_MAIN_PROC	
+        avg_data = 0;
+        ADC_GetDataWithInterrupt(adc_data, ADC_BUFFER_SIZE);
+        
+        for(i = 0; i < ADC_BUFFER_SIZE; i++)
+        {
+            avg_data += adc_data[i];
+        }
+        avg_data /= ADC_BUFFER_SIZE;
+#endif
+
+#if PWM_MAIN_PROC
+        // 새로운 목표 수신
+        if(pwm_start_flag)
+        {
+            pwm_start_flag = 0;
+            target_adc = pwm_to_adc((uint16_t)t_cap_duty);
+            
+            // 새 목표 수신 시 초기화
+            position_reached = 0;
+            stop_counter = 0;
+            integral = 0;
+            prev_error = 0;
+            
+#if UART_MAIN_PROC	
+            LPUART_SendStr("NEW TGT:");
+            LPUART_SendNum((unsigned long)target_adc);
+            LPUART_SendStr("\r\n");
+#endif		
+        }
+        
+        // 제어 주기: 20ms
+        control_cnt++;
+        if(control_cnt >= 4)
+        {
+            control_cnt = 0;
+            
+            // 목표에 도달했는지 확인
+            if(error > -POSITION_TOLERANCE && error < POSITION_TOLERANCE)
+            {
+                stop_counter++;
+                if(stop_counter >= STOP_COUNT_LIMIT)
+                {
+                    position_reached = 1;  // 도달!
+                }
+            }
+            else
+            {
+                stop_counter = 0;
+                position_reached = 0;
+            }
+            
+            // 목표에 도달하지 않았으면 PID 제어
+            if(!position_reached)
+            {
+                pid_output = pid_compute(target_adc, avg_data);
+                
+                temp_pulse = (int32_t)output_pulse + pid_output;
+                
+                if(temp_pulse < SERVO_PULSE_MIN) temp_pulse = SERVO_PULSE_MIN;
+                if(temp_pulse > SERVO_PULSE_MAX) temp_pulse = SERVO_PULSE_MAX;
+                
+                output_pulse = (uint16_t)temp_pulse;
+                set_servo_us(PWM_NO1, output_pulse);
+            }
+            else
+            {
+                // 목표 도달 시 현재 펄스 유지 (정지)
+                set_servo_us(PWM_NO1, output_pulse);
+            }
+            
+#if UART_MAIN_PROC	
+            LPUART_SendStr("ADC:");
+            LPUART_SendNum((unsigned long)avg_data);
+            LPUART_SendStr(" OUT:");
+            LPUART_SendNum((unsigned long)output_pulse);
+            LPUART_SendStr(" ERR:");
+            if(error < 0)
+            {
+                LPUART_SendChar('-');
+                LPUART_SendNum((unsigned long)(-error));
+            }
+            else
+            {
+                LPUART_SendNum((unsigned long)error);
+            }
+            if(position_reached)
+            {
+                LPUART_SendStr(" [STOP]");
+            }
+            LPUART_SendStr("\r\n");
+#endif
+        }
+#endif
+    }
+}
+
+//======================================================
+// Interrupt routines
+//======================================================
+
+void INT_Ext11() interrupt 1
+{
+    if (P0 & (1<<3))
+    {
+        capture_cnt = 0;
+    }
+    else
+    {
+        capture_cnt += Timer1_GetCaptureValue();
+        t_cap_duty = capture_cnt/2;
+        pwm_start_flag = 1;
+    }
+    EIFLAG2 = ~(1<<1);
+}
+
+void INT_Timer0() interrupt 12 {}
+void INT_Timer1() interrupt 13 { capture_cnt += 0x10000; }
+void INT_Timer2() interrupt 14 {}
+
+//======================================================
+// Peripheral setting routines
+//======================================================
+
+void ADC_init()
+{
+    PPCLKEN0 |= 0x40;
+    ADCCRL = 0x00;
+    ADCCRH = 0x0E;
+}
+
+void ADC_start(unsigned char ch)
+{
+    ADCCRL |= 0x80;
+    ADCCRL = (ADCCRL & 0xf0) | (ch & 0x0f);
+    ADCCRL |= 0x40;
+}
+
+void ExINT_init()
+{
+    EIPOL2L = 0x0C;
+    IE |= 0x02;
+}
+
+#if UART_MAIN_PROC
+void LPUART_init()
+{
+    PPCLKEN2 |= 0x80;
+    LPUT0CR0 = 0x06;
+    LPUT0CR1 = 0x0D;
+    LPUT0CR2 = 0x00;
+    LPUT0CR3 = 0x00;
+    LPUT0CR4 = 0x00;
+    LPUT0BDR = 0x67;
+    LPUT0BCPH = 0x80;
+    LPUT0BCPL = 0x49;
+    LPUT0RTDRH = 0xFF;
+    LPUT0RTDRL = 0xFF;
+    LPUT0RCDR = 0x00;
+    LPUT0DLY = 0x00;
+}
+
+void LPUART_SendChar(unsigned char ch)
+{
+    LPUT0TDR = ch;
+    delay_us(100);
+}
+
+void LPUART_SendStr(const char* str)
+{
+    while(*str != '\0')
+    {
+        LPUART_SendChar(*str);
+        str++;
+    }
+}
+
+void LPUART_SendNum(unsigned long num)
+{
+    char buffer[12];
+    int i = 0;
+    
+    if(num == 0)
+    {
+        LPUART_SendChar('0');
+        return;
+    }
+    
+    while(num > 0)
+    {
+        buffer[i++] = (num % 10) + '0';
+        num /= 10;
+    }
+    
+    while(i > 0)
+    {
+        LPUART_SendChar(buffer[--i]);
+    }
+}
+#endif
+
+void Timer0_init()
+{
+    PPCLKEN1 |= 0x01;
+    T0CRH = 0x30;
+    T0CRL = 0x20;
+    T0BDRH = 0x4E;
+    T0BDRL = 0x1F;
+    T0ADRH = 0x9C;
+    T0ADRL = 0x3F;
+    IE2 |= 0x01;
+    T0CRH |= 0x80;
+}
+
+void Timer0_SetPPGDutyCounter(uint16_t count)
+{
+    T0BDRH = 0x00FF & (count >> 8);
+    T0BDRL = 0x00FF & (count >> 0);
+}
+
+void Timer0_SetPPGPeriodCounter(uint16_t count)
+{
+    T0ADRH = 0x00FF & (count >> 8);
+    T0ADRL = 0x00FF & (count >> 0);
+}
+
+void Timer1_init()
+{
+    PPCLKEN1 |= 0x02;
+    T1CRH = 0x10;
+    T1CRL = 0x60;
+    T1ADRH = 0x9C;
+    T1ADRL = 0x3F;
+    IE2 |= 0x02;
+    T1CRH |= 0x80;
+}
+
+uint16_t Timer1_GetCaptureValue(void) 
+{
+    uint16_t count = 0;
+    count = T1CAPL;
+    count += (T1CAPH << 8);
+    return count;
+}
+
+void Timer2_init()
+{
+    PPCLKEN1 |= 0x04;
+    T2CRH = 0x30;
+    T2CRL = 0x60;
+    T2BDRH = 0x4E;
+    T2BDRL = 0x1F;
+    T2ADRH = 0x9C;
+    T2ADRL = 0x3F;
+    IE2 |= 0x04;
+    T2CRH |= 0x80;
+}
+
+void clock_init()
+{
+    unsigned char tmp;
+    tmp = OSCCR;
+    tmp &= ~(0x07 << 3);
+    tmp |= 0x28;
+    OSCCR = tmp;
+    SCCR = 0x00;
+}
+
+void port_init()
+{
+    PPCLKEN0 |= 0x01;
+    P0PU = 0x00;
+    P0OD = 0x00;
+    P0IOH = 0xAA;
+    P0IOL = 0x2A;
+    P0DB = 0x08;
+    P0 = 0x00;
+    P0FSRH = 0x18;
+    P0FSRL = 0x10;
+    
+    PPCLKEN0 |= 0x02;
+    P1PU = 0x00;
+    P1OD = 0x00;
+    P1IOH = 0xAA;
+    P1IOL = 0x96;
+    P1DB = 0x00;
+    P1 = 0x00;
+    P1FSRH = 0x00;
+    P1FSRL = 0x00;
+    
+    PPCLKEN0 |= 0x04;
+    P2PU = 0x00;
+    P2OD = 0x00;
+    P2IOL = 0xAA;
+    P2 = 0x00;
+    P2FSRL = 0x00;
+}

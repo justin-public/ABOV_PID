@@ -21,21 +21,27 @@ Target DLL:      C:\Program Files (x86)\ABOV Semiconductor\Setup_KEIL_8051_DLL\A
 Dialog DLL:      TCore51.DLL V2.66.5.0
  
 <h2>Project:</h2>
-D:\work\Abov_PID_test\PID_test.uvproj
+D:\work_code\Abov_PID\ABOV_PID\PID_test.uvproj
 Project File Date:  11/09/2025
 
 <h2>Output:</h2>
 Rebuild target 'Target 1'
 assembling startup.a51...
 compiling main.c...
+main.c(186): warning C280: 'pid_output': unreferenced local variable
+main.c(187): warning C280: 'motor_pulse': unreferenced local variable
 compiling A96L116_adc.c...
 linking...
 *** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_PWM_TO_ADC?MAIN
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_PID_COMPUTE?MAIN
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
     SEGMENT: ?PR?_LPUART_SENDSTR?MAIN
-Program Size: data=9.1 xdata=69 code=1976
+Program Size: data=9.1 xdata=93 code=2484
 creating hex file from "PID_test"...
-"PID_test" - 0 Error(s), 1 Warning(s).
-Build Time Elapsed:  00:00:01
+"PID_test" - 0 Error(s), 5 Warning(s).
+Build Time Elapsed:  00:00:00
 </pre>
 </body>
 </html>

@@ -27,6 +27,7 @@
 #define     __IO    volatile         /*!< defines 'read / write' permissions  */
  
 /*!< Signed integer types  */
+#if 0
 typedef signed  char    s8;
 typedef signed  short   s16;
 typedef signed  long    s32;
@@ -46,11 +47,16 @@ typedef double          FP64;
 typedef unsigned char   u8;
 typedef unsigned short  u16;
 typedef unsigned long   u32;
+#endif
 
 typedef unsigned char   uint8_t;
 typedef unsigned short  uint16_t;
 typedef unsigned long   uint32_t;
 
+typedef signed  short   int16_t;
+typedef signed long     int32_t;
+
+#if 0
 typedef unsigned char   INT8U;
 typedef unsigned short  INT16U;
 typedef unsigned long   INT32U;
@@ -341,6 +347,7 @@ typedef enum { BIT0 = 0, BIT1, BIT2, BIT3, BIT4, BIT5, BIT6, BIT7 } BitPosition;
 #define _1111_1101    0xFD
 #define _1111_1110    0xFE
 #define _1111_1111    0xFF
+#endif
 
 #endif  /* End of __TYPEDEF_H_ */
 /* --------------------------------- End Of File ------------------------------ */

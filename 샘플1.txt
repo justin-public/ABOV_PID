@@ -31,8 +31,8 @@
 #define ADC_BUFFER_SIZE     10
 
 #define ADC_MAIN_PROC	 1
-#define PWM_MAIN_PROC	 0
-#define UART_MAIN_PROC	 1
+#define PWM_MAIN_PROC	 1
+#define UART_MAIN_PROC	 0
 
 #define SERVO_FREQ  50          // 50Hz (20ms 주기)
 #define SERVO_PERIOD 40000      // 2MHz / 50Hz = 40,000 카운트 (20ms)
@@ -218,10 +218,10 @@ void main()
 			}
 			avg_data /= ADC_BUFFER_SIZE;
 		#if UART_MAIN_PROC	
-			LPUART_SendNum((unsigned long)avg_data);
-			LPUART_SendChar(0x0D);
-			LPUART_SendChar(0x0A);
-			delay_us(1000);
+			//LPUART_SendNum((unsigned long)avg_data);
+			//LPUART_SendChar(0x0D);
+			//LPUART_SendChar(0x0A);
+			//delay_us(1000);
 		#endif
 		#endif
 		#if PWM_MAIN_PROC
@@ -236,7 +236,6 @@ void main()
 				delay_us(1000);
 			#endif		
 			}
-			#if 0
 			pid_output = pid_compute(target_pos_adc, (int16_t)avg_data);
 
 			motor_pulse = (int32_t)current_pulse + pid_output;
@@ -246,7 +245,7 @@ void main()
 			
 			current_pulse = (uint16_t)motor_pulse;
 			set_servo_us(PWM_NO1, current_pulse);
-			#endif
+
 		#endif
 	}
 }
@@ -532,3 +531,5 @@ void port_init()
 	P2 = 0x00;      	// port initial value
 	P2FSRL = 0x00;  	// P2 selection Low
 }
+
+

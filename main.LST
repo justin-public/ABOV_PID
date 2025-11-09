@@ -1,4 +1,4 @@
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 1   
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 1   
 
 
 C51 COMPILER V9.60.7.0, COMPILATION OF MODULE MAIN
@@ -51,171 +51,282 @@ line level    source
   41          #define SERVO_PULSE_CENTER  1500
   42          #define SERVO_PULSE_MAX     2100
   43          
-  44          uint16_t avg_data = 0;
-  45          uint16_t adc_data[ADC_BUFFER_SIZE];
+  44          #define ADC_MIN  163
+  45          #define ADC_MAX  3918
   46          
-  47          uint32_t capture_cnt, t_cap_duty;
-  48          bit pwm_start_flag = 0;
-  49          
-  50          void LPUART_SendChar(unsigned char ch);
-  51          void LPUART_SendStr(const char* str);
-  52          void LPUART_SendNum(unsigned long num);
-  53          void delay_us(unsigned long us);
-  54          
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 2   
+  47          // PID 파라미터 (정수 연산, 스케일 100)
+  48          #define KP  2      // Kp = 0.50
+  49          #define KI  1       // Ki = 0.05
+  50          #define KD  1      // Kd = 0.20
+  51          #define SCALE 100
+  52          
+  53          uint16_t avg_data = 0;
+  54          uint16_t adc_data[ADC_BUFFER_SIZE];
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 2   
 
-  55          void set_servo_us(uint8_t pwm_no,uint16_t pulse_us);
-  56          
-  57          uint16_t Timer1_GetCaptureValue(void);
+  55          
+  56          uint32_t capture_cnt, t_cap_duty;
+  57          bit pwm_start_flag = 0;
   58          
-  59          void Timer0_SetPPGDutyCounter(uint16_t count);
-  60          void Timer0_SetPPGPeriodCounter(uint16_t count);
+  59          uint16_t target_pos_adc = 2015;   // 2040??
+  60          uint16_t current_pulse = SERVO_PULSE_CENTER;
   61          
-  62          void delay_us(unsigned long us)  
-  63          {
-  64   1          unsigned long i;
-  65   1          for(i = 0; i < us; i++)
-  66   1          {
-  67   2              NOP;  
-  68   2          }
-  69   1      }
+  62          int16_t error = 0;
+  63          int16_t prev_error = 0;
+  64          int32_t integral = 0;
+  65          
+  66          void LPUART_SendChar(unsigned char ch);
+  67          void LPUART_SendStr(const char* str);
+  68          void LPUART_SendNum(unsigned long num);
+  69          void delay_us(unsigned long us);
   70          
-  71          void set_servo_us(uint8_t pwm_no,uint16_t pulse_us)
-  72          {
-  73   1        uint16_t p_cnt = SERVO_PERIOD;
-  74   1          uint16_t duty_cnt;
-  75   1      
-  76   1        if(pulse_us < SERVO_PULSE_MIN) pulse_us = SERVO_PULSE_MIN;
-  77   1          if(pulse_us > SERVO_PULSE_MAX) pulse_us = SERVO_PULSE_MAX;
-  78   1      
-  79   1          duty_cnt = pulse_us * 2;
-  80   1        
-  81   1        if(pwm_no == PWM_NO1)
-  82   1        {
-  83   2          Timer0_SetPPGPeriodCounter(p_cnt);
-  84   2          Timer0_SetPPGDutyCounter(duty_cnt); 
-  85   2        }
-  86   1        else
-  87   1        {
-  88   2          //Timer0_SetPPGPeriodCounter(p_cnt);
-  89   2          //Timer0_SetPPGDutyCounter(duty_cnt); 
-  90   2        } 
-  91   1      }
-  92          
-  93          void main()
-  94          {
-  95   1        uint8_t i = 0;
-  96   1        uint32_t t_cap_duty_cpy = 0;
-  97   1        
-  98   1        GLOBAL_INTERRUPT_DIS();           
-  99   1        port_init();      // initialize ports
- 100   1        clock_init();     // initialize operation clock
- 101   1        ADC_init();       // initialize A/D convertor
- 102   1        ADC_start(7);
- 103   1        ExINT_init();     // initialize external interrupt
- 104   1      #if UART_MAIN_PROC  
- 105   1        LPUART_init();    // initialize LPUART
- 106   1      #endif  
- 107   1        Timer0_init();    // initialize Timer0
- 108   1        Timer1_init();    // initialize Timer1
- 109   1        Timer2_init();    // initialize Timer2
- 110   1        GLOBAL_INTERRUPT_EN();            
- 111   1        
- 112   1        // TODO: add your main code here
- 113   1        P1 |= (1 << 1);     // HIGH P1.1 
- 114   1        P1 &= ~(1 << 2);    // LOW  P1.2
- 115   1        
- 116   1        set_servo_us(PWM_NO1,900);
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 3   
+  71          void set_servo_us(uint8_t pwm_no,uint16_t pulse_us);
+  72          
+  73          uint16_t Timer1_GetCaptureValue(void);
+  74          
+  75          void Timer0_SetPPGDutyCounter(uint16_t count);
+  76          void Timer0_SetPPGPeriodCounter(uint16_t count);
+  77          
+  78          int16_t pid_compute(int16_t target_pos, int16_t current_pos);
+  79          
+  80          void delay_us(unsigned long us)  
+  81          {
+  82   1          unsigned long i;
+  83   1          for(i = 0; i < us; i++)
+  84   1          {
+  85   2              NOP;  
+  86   2          }
+  87   1      }
+  88          
+  89          void set_servo_us(uint8_t pwm_no,uint16_t pulse_us)
+  90          {
+  91   1        uint16_t p_cnt = SERVO_PERIOD;
+  92   1          uint16_t duty_cnt;
+  93   1      
+  94   1        if(pulse_us < SERVO_PULSE_MIN) pulse_us = SERVO_PULSE_MIN;
+  95   1          if(pulse_us > SERVO_PULSE_MAX) pulse_us = SERVO_PULSE_MAX;
+  96   1      
+  97   1          duty_cnt = pulse_us * 2;
+  98   1        
+  99   1        if(pwm_no == PWM_NO1)
+ 100   1        {
+ 101   2          Timer0_SetPPGPeriodCounter(p_cnt);
+ 102   2          Timer0_SetPPGDutyCounter(duty_cnt); 
+ 103   2        }
+ 104   1        else
+ 105   1        {
+ 106   2          //Timer0_SetPPGPeriodCounter(p_cnt);
+ 107   2          //Timer0_SetPPGDutyCounter(duty_cnt); 
+ 108   2        } 
+ 109   1      }
+ 110          
+ 111          uint16_t pwm_to_adc(uint16_t pwm_us)
+ 112          {
+ 113   1        uint32_t pwm_adc_value = 0;
+ 114   1      
+ 115   1        if(pwm_us < SERVO_PULSE_MIN)pwm_us = SERVO_PULSE_MIN;
+ 116   1        if(pwm_us > SERVO_PULSE_MAX)pwm_us = SERVO_PULSE_MAX;
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 3   
 
  117   1        
- 118   1        while(1)
- 119   1        {
- 120   2          #if ADC_MAIN_PROC 
- 121   2            avg_data = 0;
- 122   2            ADC_GetDataWithInterrupt(adc_data, ADC_BUFFER_SIZE);    
- 123   2            
- 124   2            for(i = 0; i < ADC_BUFFER_SIZE; i++)
- 125   2            {  
- 126   3              avg_data += adc_data[i];
- 127   3            }
- 128   2            avg_data /= ADC_BUFFER_SIZE;
- 129   2          #if UART_MAIN_PROC  
- 130   2            LPUART_SendNum((unsigned long)avg_data);
- 131   2            LPUART_SendChar(0x0D);
- 132   2            LPUART_SendChar(0x0A);
- 133   2            delay_us(1000);
- 134   2          #endif
- 135   2          #endif
- 136   2          #if PWM_MAIN_PROC
+ 118   1        pwm_adc_value = (uint32_t)(pwm_us - SERVO_PULSE_MIN) * (ADC_MAX - ADC_MIN);
+ 119   1        pwm_adc_value /= (SERVO_PULSE_MAX - SERVO_PULSE_MIN);
+ 120   1      
+ 121   1        return (uint16_t)(pwm_adc_value + ADC_MIN);
+ 122   1      }
+ 123          
+ 124          #if 0
+              int16_t pid_compute(int16_t setpoint, int16_t feedback)
+              {
+                static int16_t integral = 0;
+                static int16_t previous_error = 0;
+                int16_t error;
+                int16_t derivative;
+                int16_t output;
+              
+                // PID coefficients
+                const int16_t Kp = 2;   // Proportional gain
+                const int16_t Ki = 1;   // Integral gain
+                const int16_t Kd = 1;   // Derivative gain
+              
+                // Calculate error
+                error = setpoint - feedback;
+              
+                // Proportional term
+                int16_t Pout = Kp * error;
+              
+                // Integral term
+                integral += error;
+                int16_t Iout = Ki * integral;
+              
+                // Derivative term
+                derivative = error - previous_error;
+                int16_t Dout = Kd * derivative;
+              
+                // Total output
+                output = Pout + Iout + Dout;
+              
+                // Save error for next derivative calculation
+                previous_error = error;
+              
+                return output;
+              }
+              #endif
+ 161          
+ 162          int16_t pid_compute(int16_t target_pos, int16_t current_pos)
+ 163          {
+ 164   1        int16_t derivative;
+ 165   1        int16_t output;
+ 166   1        
+ 167   1        error = target_pos - current_pos;    // 비례 제어
+ 168   1        integral += error;                   // 적분 제어
+ 169   1      
+ 170   1        // windup 방지
+ 171   1        if(integral > 5000) integral = 5000;
+ 172   1        if(integral < -5000) integral = -5000;
+ 173   1      
+ 174   1        derivative = error - prev_error; // 미분 제어
+ 175   1        prev_error = error;
+ 176   1      
+ 177   1        output = ((int32_t)KP * error + (int32_t)KI * integral + (int32_t)KD * derivative) / SCALE;
+ 178   1        
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 4   
+
+ 179   1        return (int16_t)output;
+ 180   1      }
+ 181          
+ 182          void main()
+ 183          {
+ 184   1        uint8_t i = 0;
+ 185   1        uint32_t t_cap_duty_cpy = 0;
+ 186   1        int16_t pid_output;
+ 187   1        int32_t motor_pulse;
+ 188   1        
+ 189   1        GLOBAL_INTERRUPT_DIS();           
+ 190   1        port_init();      // initialize ports
+ 191   1        clock_init();     // initialize operation clock
+ 192   1        ADC_init();       // initialize A/D convertor
+ 193   1        ADC_start(7);
+ 194   1        ExINT_init();     // initialize external interrupt
+ 195   1      #if UART_MAIN_PROC  
+ 196   1        LPUART_init();    // initialize LPUART
+ 197   1      #endif  
+ 198   1        Timer0_init();    // initialize Timer0
+ 199   1        Timer1_init();    // initialize Timer1
+ 200   1        Timer2_init();    // initialize Timer2
+ 201   1        GLOBAL_INTERRUPT_EN();            
+ 202   1        
+ 203   1        // TODO: add your main code here
+ 204   1        P1 |= (1 << 1);     // HIGH P1.1 
+ 205   1        P1 &= ~(1 << 2);    // LOW  P1.2
+ 206   1        
+ 207   1        set_servo_us(PWM_NO1,900);
+ 208   1        
+ 209   1        while(1)
+ 210   1        {
+ 211   2          #if ADC_MAIN_PROC 
+ 212   2            avg_data = 0;
+ 213   2            ADC_GetDataWithInterrupt(adc_data, ADC_BUFFER_SIZE);    
+ 214   2            
+ 215   2            for(i = 0; i < ADC_BUFFER_SIZE; i++)
+ 216   2            {  
+ 217   3              avg_data += adc_data[i];
+ 218   3            }
+ 219   2            avg_data /= ADC_BUFFER_SIZE;
+ 220   2          #if UART_MAIN_PROC  
+ 221   2            LPUART_SendNum((unsigned long)avg_data);
+ 222   2            LPUART_SendChar(0x0D);
+ 223   2            LPUART_SendChar(0x0A);
+ 224   2            delay_us(1000);
+ 225   2          #endif
+ 226   2          #endif
+ 227   2          #if PWM_MAIN_PROC
                     if(pwm_start_flag)
                     {
-                      
-                      t_cap_duty_cpy = t_cap_duty;  
-                      //LPUART_SendNum((unsigned long)t_cap_duty);
-                      //LPUART_SendChar(0x0D);
-                      //LPUART_SendChar(0x0A);
                       pwm_start_flag = 0;
+                      target_pos_adc = pwm_to_adc((uint16_t)t_cap_duty); 
+                    #if UART_MAIN_PROC  
+                      LPUART_SendNum((unsigned long)target_pos_adc);
+                      LPUART_SendChar(0x0D);
+                      LPUART_SendChar(0x0A);
+                      delay_us(1000);
+                    #endif    
                     }
-                  #endif
- 147   2        }
- 148   1      }
- 149          
- 150          //======================================================
- 151          // Interrupt routines
- 152          //======================================================
- 153          
- 154          void INT_Ext11() interrupt 1
- 155          {
- 156   1        // External interrupt 11
- 157   1        // TODO: add your code here
- 158   1        if (P0 & (1<<3))
- 159   1        {
- 160   2          capture_cnt = 0;    
- 161   2        }
- 162   1        else
- 163   1        {
- 164   2          capture_cnt += Timer1_GetCaptureValue();
- 165   2          t_cap_duty = capture_cnt/2;
- 166   2      
- 167   2          pwm_start_flag = 1;
- 168   2        }
- 169   1        EIFLAG2 = ~(1<<1);
- 170   1      }
- 171          
- 172          void INT_Timer0() interrupt 12
- 173          {
- 174   1        // Timer0 interrupt
- 175   1        // TODO: add your code here
- 176   1      }
- 177          
- 178          void INT_Timer1() interrupt 13
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 4   
+                    #if 0
+                    pid_output = pid_compute(target_pos_adc, (int16_t)avg_data);
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 5   
 
- 179          {
- 180   1        // Timer1 interrupt
- 181   1        // TODO: add your code here
- 182   1        capture_cnt += 0x10000; 
- 183   1      }
- 184          
- 185          void INT_Timer2() interrupt 14
- 186          {
- 187   1        // Timer1 interrupt
- 188   1        // TODO: add your code here
- 189   1      }
- 190          
- 191          #if 0
+              
+                    motor_pulse = (int32_t)current_pulse + pid_output;
+              
+                    if(motor_pulse < SERVO_PULSE_MIN) motor_pulse = SERVO_PULSE_MIN;
+                    if(motor_pulse > SERVO_PULSE_MAX) motor_pulse = SERVO_PULSE_MAX;
+                    
+                    current_pulse = (uint16_t)motor_pulse;
+                    set_servo_us(PWM_NO1, current_pulse);
+                    #endif
+                  #endif
+ 251   2        }
+ 252   1      }
+*** WARNING C280 IN LINE 186 OF main.c: 'pid_output': unreferenced local variable
+*** WARNING C280 IN LINE 187 OF main.c: 'motor_pulse': unreferenced local variable
+ 253          
+ 254          //======================================================
+ 255          // Interrupt routines
+ 256          //======================================================
+ 257          
+ 258          void INT_Ext11() interrupt 1
+ 259          {
+ 260   1        // External interrupt 11
+ 261   1        // TODO: add your code here
+ 262   1        if (P0 & (1<<3))
+ 263   1        {
+ 264   2          capture_cnt = 0;    
+ 265   2        }
+ 266   1        else
+ 267   1        {
+ 268   2          capture_cnt += Timer1_GetCaptureValue();
+ 269   2          t_cap_duty = capture_cnt/2;
+ 270   2      
+ 271   2          pwm_start_flag = 1;
+ 272   2        }
+ 273   1        EIFLAG2 = ~(1<<1);
+ 274   1      }
+ 275          
+ 276          #if 0
+              void INT_Timer0() interrupt 12
+              {
+                // Timer0 interrupt
+                // TODO: add your code here
+              }
+              
+              void INT_Timer1() interrupt 13
+              {
+                // Timer1 interrupt
+                // TODO: add your code here
+                capture_cnt += 0x10000; 
+              }
+              
+              void INT_Timer2() interrupt 14
+              {
+                // Timer1 interrupt
+                // TODO: add your code here
+              }
+              #endif
+ 296          #if 0
               void INT_ADC() interrupt 18
               {
                 // ADC interrupt
                 // TODO: add your code here
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 6   
+
               }
               #endif
- 198          
- 199          //======================================================
- 200          // Peripheral setting routines
- 201          //======================================================
- 202          #if 0
+ 303          
+ 304          //======================================================
+ 305          // Peripheral setting routines
+ 306          //======================================================
+ 307          #if 0
               unsigned int ADC_read()
               {
                 // read A/D convertor
@@ -228,237 +339,233 @@ line level    source
                 return  adcVal;
               }
               #endif
- 215          
- 216          void ADC_init()
- 217          {
- 218   1        // initialize A/D convertor
- 219   1        PPCLKEN0 |= 0x40; // Enable clock for ADC
- 220   1        ADCCRL = 0x00;    // setting
- 221   1        ADCCRH = 0x0E;    // trigger source, alignment, frequency
- 222   1        //IE3 |= 0x01;      // enable ADC interrupt
- 223   1      }
- 224          
- 225          void ADC_start(unsigned char ch)
- 226          {
- 227   1        // start A/D convertor
- 228   1        ADCCRL |= 0x80;   // enable ADC
- 229   1        ADCCRL = (ADCCRL & 0xf0) | (ch & 0x0f); // select channel
- 230   1        ADCCRL |= 0x40;   // start ADC
- 231   1      }
- 232          
- 233          void ExINT_init()
- 234          {
- 235   1        // initialize external interrupt
- 236   1        EIPOL2L = 0x0C;   // edge : external INT.10 ~ 12
- 237   1        IE |= 0x02;       // Enable Ext.INT 10 ~ 12
- 238   1      }
- 239          
- 240          #if UART_MAIN_PROC
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 5   
-
- 241          void LPUART_init()
- 242          {
- 243   1        // initialize LPUART
- 244   1        PPCLKEN2 |= 0x80; // Enable clock for LPUART
- 245   1      
- 246   1        LPUT0CR0 = 0x06;  // Control 0
- 247   1        LPUT0CR1 = 0x0D;  // Control 1
- 248   1      
- 249   1        // Set DE pin : Disabled
- 250   1        LPUT0CR2 = 0x00;  // Active level start time (0.006500ms)
- 251   1        LPUT0CR3 = 0x00;  // Active level finish time (0.006500ms)
- 252   1        LPUT0CR4 = 0x00;  // Control 4
- 253   1      
- 254   1        // Set communication
- 255   1        // - Source clock : fx
- 256   1        // - Baudrate : 9600
- 257   1        // - Data bit count : 8
- 258   1        // - Stop bit count : 1
- 259   1        // - Parity : No
- 260   1        // - Oversampling : 16
- 261   1        LPUT0BDR = 0x67;  // Baudrate
- 262   1        LPUT0BCPH = 0x80; // Bit compensation High
- 263   1        LPUT0BCPL = 0x49; // Bit compensation Low
- 264   1        LPUT0RTDRH = 0xFF;  // Rx time out High (6815.744000ms)
- 265   1        LPUT0RTDRL = 0xFF;  // Rx time out Low
- 266   1        LPUT0RCDR = 0x00; // Rx character detection data
- 267   1        LPUT0DLY = 0x00;  // Tx delay time (0.000000ms)
- 268   1      }
- 269          
- 270          void LPUART_SendChar(unsigned char ch)
- 271          {
- 272   1          LPUT0TDR = ch;
- 273   1      }
- 274          
- 275          void LPUART_SendStr(const char* str)
- 276          {
- 277   1        while(*str != '\0')
- 278   1        {
- 279   2          LPUART_SendChar(*str);
- 280   2          delay_us(100);
- 281   2          str++;
- 282   2        }
- 283   1      }
- 284          
- 285          void LPUART_SendNum(unsigned long num)
- 286          {
- 287   1        char buffer[12];
- 288   1        int i = 0;
- 289   1      
- 290   1        if(num == 0)
- 291   1        {
- 292   2          LPUART_SendChar('0');
- 293   2          return;
- 294   2        }
- 295   1      
- 296   1        while(num > 0)
- 297   1        {
- 298   2          buffer[i++] = (num % 10) + '0';
- 299   2          num /= 10;
- 300   2        }
- 301   1      
- 302   1        while(i > 0)
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 6   
-
- 303   1        {
- 304   2          LPUART_SendChar(buffer[--i]);
- 305   2          delay_us(100);
- 306   2        }
- 307   1      }
- 308          #endif
- 309          
- 310          void Timer0_init()
- 311          {
- 312   1        // initialize Timer0
- 313   1        PPCLKEN1 |= 0x01; // Enable clock for Timer0
- 314   1      
- 315   1        // 16bit PWM0, period = 20.000000mS ( 50.000000Hz )
- 316   1        //     PWM duty = 50.000000%
- 317   1        T0CRH = 0x30;     // PWM setting High, repeat mode
- 318   1        T0CRL = 0x20;     // PWM setting Low
- 319   1        T0BDRH = 0x4E;    // duty High
- 320   1        T0BDRL = 0x1F;    // duty Low
- 321   1        T0ADRH = 0x9C;    // period count High
- 322   1        T0ADRL = 0x3F;    // period count Low
- 323   1        //T0CRL = 0x08;   // disable Timer reload signal
- 324   1        IE2 |= 0x01;      // Enable Timer0 interrupt
- 325   1      
- 326   1        T0CRH |= 0x80;    // enable counter
- 327   1      }
- 328          
- 329          void Timer0_SetPPGDutyCounter(uint16_t count)
- 330          {
- 331   1          T0BDRH = 0x00FF & (count >> 8);
- 332   1          T0BDRL = 0x00FF & (count >> 0);
- 333   1      }
- 334          
- 335          void Timer0_SetPPGPeriodCounter(uint16_t count)
- 336          {
- 337   1          T0ADRH = 0x00FF & (count >> 8);
- 338   1          T0ADRL = 0x00FF & (count >> 0);
- 339   1      }
- 340          
- 341          void Timer1_init()
- 342          {
- 343   1        // initialize Timer1
- 344   1        PPCLKEN1 |= 0x02; // Enable clock for Timer1
- 345   1      
- 346   1        // 16bit capture1, period = 20.000000mS
- 347   1        T1CRH = 0x10;     // capture setting High
- 348   1        T1CRL = 0x60;     // capture setting Low
- 349   1        T1ADRH = 0x9C;    // period count High
- 350   1        T1ADRL = 0x3F;    // period count Low
- 351   1        //T1CRL = 0x08;   // disable Timer reload signal
- 352   1        IE2 |= 0x02;      // Enable Timer1 interrupt
+ 320          
+ 321          void ADC_init()
+ 322          {
+ 323   1        // initialize A/D convertor
+ 324   1        PPCLKEN0 |= 0x40; // Enable clock for ADC
+ 325   1        ADCCRL = 0x00;    // setting
+ 326   1        ADCCRH = 0x0E;    // trigger source, alignment, frequency
+ 327   1        //IE3 |= 0x01;      // enable ADC interrupt
+ 328   1      }
+ 329          
+ 330          void ADC_start(unsigned char ch)
+ 331          {
+ 332   1        // start A/D convertor
+ 333   1        ADCCRL |= 0x80;   // enable ADC
+ 334   1        ADCCRL = (ADCCRL & 0xf0) | (ch & 0x0f); // select channel
+ 335   1        ADCCRL |= 0x40;   // start ADC
+ 336   1      }
+ 337          
+ 338          void ExINT_init()
+ 339          {
+ 340   1        // initialize external interrupt
+ 341   1        EIPOL2L = 0x0C;   // edge : external INT.10 ~ 12
+ 342   1        IE |= 0x02;       // Enable Ext.INT 10 ~ 12
+ 343   1      }
+ 344          
+ 345          #if UART_MAIN_PROC
+ 346          void LPUART_init()
+ 347          {
+ 348   1        // initialize LPUART
+ 349   1        PPCLKEN2 |= 0x80; // Enable clock for LPUART
+ 350   1      
+ 351   1        LPUT0CR0 = 0x06;  // Control 0
+ 352   1        LPUT0CR1 = 0x0D;  // Control 1
  353   1      
- 354   1        T1CRH |= 0x80;    // enable counter
- 355   1      }
- 356          
- 357          uint16_t Timer1_GetCaptureValue(void) 
- 358          {
- 359   1        uint16_t count = 0;
- 360   1        count = T1CAPL;
- 361   1        count += (T1CAPH << 8);
- 362   1        return count;
- 363   1      }
- 364          
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 7   
+ 354   1        // Set DE pin : Disabled
+ 355   1        LPUT0CR2 = 0x00;  // Active level start time (0.006500ms)
+ 356   1        LPUT0CR3 = 0x00;  // Active level finish time (0.006500ms)
+ 357   1        LPUT0CR4 = 0x00;  // Control 4
+ 358   1      
+ 359   1        // Set communication
+ 360   1        // - Source clock : fx
+ 361   1        // - Baudrate : 9600
+ 362   1        // - Data bit count : 8
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 7   
 
- 365          void Timer2_init()
- 366          {
- 367   1        // initialize Timer2
- 368   1        PPCLKEN1 |= 0x04; // Enable clock for Timer2
- 369   1      
- 370   1        // 16bit PWM2, period = 20.000000mS ( 50.000000Hz )
- 371   1        //     PWM duty = 50.000000%
- 372   1        T2CRH = 0x30;     // PWM setting High, repeat mode
- 373   1        T2CRL = 0x60;     // PWM setting Low
- 374   1        T2BDRH = 0x4E;    // duty High
- 375   1        T2BDRL = 0x1F;    // duty Low
- 376   1        T2ADRH = 0x9C;    // period count High
- 377   1        T2ADRL = 0x3F;    // period count Low
- 378   1        //T2CRL = 0x08;   // disable Timer reload signal
- 379   1        IE2 |= 0x04;      // Enable Timer2 interrupt
- 380   1      
- 381   1        T2CRH |= 0x80;    // enable counter
- 382   1      }
- 383          
- 384          void clock_init()
- 385          {
- 386   1        // HFIRC clock (16.000000MHz)
- 387   1        unsigned char tmp;  // variable for HFIRC
- 388   1      
- 389   1        tmp = OSCCR;      // get default
- 390   1        tmp &= ~(0x07 << 3);  // clear divider
- 391   1        tmp |= 0x28;      // set divider
- 392   1        OSCCR = tmp;      // Set HFIRC
- 393   1        SCCR = 0x00;      // Use HFIRC
- 394   1      }
- 395          
- 396          void port_init()
- 397          {
- 398   1        // initialize ports
- 399   1        // Initialize P0x ports
- 400   1        PPCLKEN0 |= 0x01; // Enable clock for P0x ports
- 401   1        P0PU = 0x00;      // pullup
- 402   1        P0OD = 0x00;      // open drain
- 403   1        P0IOH = 0xAA;     // direction High
- 404   1        P0IOL = 0x2A;     // direction Low
- 405   1        P0DB = 0x08;      // bit7~6 = debounce clock
- 406   1        P0 = 0x00;        // port initial value
- 407   1        P0FSRH = 0x18;    // P0 selection High
- 408   1        P0FSRL = 0x10;    // P0 selection Low
- 409   1      
- 410   1        // Initialize P1x ports
- 411   1        PPCLKEN0 |= 0x02; // Enable clock for P1x ports
- 412   1        P1PU = 0x00;      // pullup
- 413   1        P1OD = 0x00;      // open drain
- 414   1        P1IOH = 0xAA;     // direction High
- 415   1        //P1IOL = 0xAA;     // direction Low
- 416   1        P1IOL = 0x96;
- 417   1        P1DB = 0x00;      // debounce
- 418   1        P1 = 0x00;        // port initial value
- 419   1        P1FSRH = 0x00;    // P1 selection High
- 420   1        P1FSRL = 0x00;    // P1 selection Low
- 421   1      
- 422   1        // Initialize P2x ports
- 423   1        PPCLKEN0 |= 0x04; // Enable clock for P2x ports
- 424   1        P2PU = 0x00;      // pullup
- 425   1        P2OD = 0x00;      // open drain
- 426   1        P2IOL = 0xAA;     // direction Low
-C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 17:18:29 PAGE 8   
+ 363   1        // - Stop bit count : 1
+ 364   1        // - Parity : No
+ 365   1        // - Oversampling : 16
+ 366   1        LPUT0BDR = 0x67;  // Baudrate
+ 367   1        LPUT0BCPH = 0x80; // Bit compensation High
+ 368   1        LPUT0BCPL = 0x49; // Bit compensation Low
+ 369   1        LPUT0RTDRH = 0xFF;  // Rx time out High (6815.744000ms)
+ 370   1        LPUT0RTDRL = 0xFF;  // Rx time out Low
+ 371   1        LPUT0RCDR = 0x00; // Rx character detection data
+ 372   1        LPUT0DLY = 0x00;  // Tx delay time (0.000000ms)
+ 373   1      }
+ 374          
+ 375          void LPUART_SendChar(unsigned char ch)
+ 376          {
+ 377   1          LPUT0TDR = ch;
+ 378   1      }
+ 379          
+ 380          void LPUART_SendStr(const char* str)
+ 381          {
+ 382   1        while(*str != '\0')
+ 383   1        {
+ 384   2          LPUART_SendChar(*str);
+ 385   2          delay_us(100);
+ 386   2          str++;
+ 387   2        }
+ 388   1      }
+ 389          
+ 390          void LPUART_SendNum(unsigned long num)
+ 391          {
+ 392   1        char buffer[12];
+ 393   1        int i = 0;
+ 394   1      
+ 395   1        if(num == 0)
+ 396   1        {
+ 397   2          LPUART_SendChar('0');
+ 398   2          return;
+ 399   2        }
+ 400   1      
+ 401   1        while(num > 0)
+ 402   1        {
+ 403   2          buffer[i++] = (num % 10) + '0';
+ 404   2          num /= 10;
+ 405   2        }
+ 406   1      
+ 407   1        while(i > 0)
+ 408   1        {
+ 409   2          LPUART_SendChar(buffer[--i]);
+ 410   2          delay_us(100);
+ 411   2        }
+ 412   1      }
+ 413          #endif
+ 414          
+ 415          void Timer0_init()
+ 416          {
+ 417   1        // initialize Timer0
+ 418   1        PPCLKEN1 |= 0x01; // Enable clock for Timer0
+ 419   1      
+ 420   1        // 16bit PWM0, period = 20.000000mS ( 50.000000Hz )
+ 421   1        //     PWM duty = 50.000000%
+ 422   1        T0CRH = 0x30;     // PWM setting High, repeat mode
+ 423   1        T0CRL = 0x20;     // PWM setting Low
+ 424   1        T0BDRH = 0x4E;    // duty High
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 8   
 
- 427   1        P2 = 0x00;        // port initial value
- 428   1        P2FSRL = 0x00;    // P2 selection Low
- 429   1      }
- 430          
- 431          
+ 425   1        T0BDRL = 0x1F;    // duty Low
+ 426   1        T0ADRH = 0x9C;    // period count High
+ 427   1        T0ADRL = 0x3F;    // period count Low
+ 428   1        //T0CRL = 0x08;   // disable Timer reload signal
+ 429   1        IE2 |= 0x01;      // Enable Timer0 interrupt
+ 430   1      
+ 431   1        T0CRH |= 0x80;    // enable counter
+ 432   1      }
+ 433          
+ 434          void Timer0_SetPPGDutyCounter(uint16_t count)
+ 435          {
+ 436   1          T0BDRH = 0x00FF & (count >> 8);
+ 437   1          T0BDRL = 0x00FF & (count >> 0);
+ 438   1      }
+ 439          
+ 440          void Timer0_SetPPGPeriodCounter(uint16_t count)
+ 441          {
+ 442   1          T0ADRH = 0x00FF & (count >> 8);
+ 443   1          T0ADRL = 0x00FF & (count >> 0);
+ 444   1      }
+ 445          
+ 446          void Timer1_init()
+ 447          {
+ 448   1        // initialize Timer1
+ 449   1        PPCLKEN1 |= 0x02; // Enable clock for Timer1
+ 450   1      
+ 451   1        // 16bit capture1, period = 20.000000mS
+ 452   1        T1CRH = 0x10;     // capture setting High
+ 453   1        T1CRL = 0x60;     // capture setting Low
+ 454   1        T1ADRH = 0x9C;    // period count High
+ 455   1        T1ADRL = 0x3F;    // period count Low
+ 456   1        //T1CRL = 0x08;   // disable Timer reload signal
+ 457   1        IE2 |= 0x02;      // Enable Timer1 interrupt
+ 458   1      
+ 459   1        T1CRH |= 0x80;    // enable counter
+ 460   1      }
+ 461          
+ 462          uint16_t Timer1_GetCaptureValue(void) 
+ 463          {
+ 464   1        uint16_t count = 0;
+ 465   1        count = T1CAPL;
+ 466   1        count += (T1CAPH << 8);
+ 467   1        return count;
+ 468   1      }
+ 469          
+ 470          void Timer2_init()
+ 471          {
+ 472   1        // initialize Timer2
+ 473   1        PPCLKEN1 |= 0x04; // Enable clock for Timer2
+ 474   1      
+ 475   1        // 16bit PWM2, period = 20.000000mS ( 50.000000Hz )
+ 476   1        //     PWM duty = 50.000000%
+ 477   1        T2CRH = 0x30;     // PWM setting High, repeat mode
+ 478   1        T2CRL = 0x60;     // PWM setting Low
+ 479   1        T2BDRH = 0x4E;    // duty High
+ 480   1        T2BDRL = 0x1F;    // duty Low
+ 481   1        T2ADRH = 0x9C;    // period count High
+ 482   1        T2ADRL = 0x3F;    // period count Low
+ 483   1        //T2CRL = 0x08;   // disable Timer reload signal
+ 484   1        IE2 |= 0x04;      // Enable Timer2 interrupt
+ 485   1      
+ 486   1        T2CRH |= 0x80;    // enable counter
+C51 COMPILER V9.60.7.0   MAIN                                                              11/09/2025 21:55:55 PAGE 9   
+
+ 487   1      }
+ 488          
+ 489          void clock_init()
+ 490          {
+ 491   1        // HFIRC clock (16.000000MHz)
+ 492   1        unsigned char tmp;  // variable for HFIRC
+ 493   1      
+ 494   1        tmp = OSCCR;      // get default
+ 495   1        tmp &= ~(0x07 << 3);  // clear divider
+ 496   1        tmp |= 0x28;      // set divider
+ 497   1        OSCCR = tmp;      // Set HFIRC
+ 498   1        SCCR = 0x00;      // Use HFIRC
+ 499   1      }
+ 500          
+ 501          void port_init()
+ 502          {
+ 503   1        // initialize ports
+ 504   1        // Initialize P0x ports
+ 505   1        PPCLKEN0 |= 0x01; // Enable clock for P0x ports
+ 506   1        P0PU = 0x00;      // pullup
+ 507   1        P0OD = 0x00;      // open drain
+ 508   1        P0IOH = 0xAA;     // direction High
+ 509   1        P0IOL = 0x2A;     // direction Low
+ 510   1        P0DB = 0x08;      // bit7~6 = debounce clock
+ 511   1        P0 = 0x00;        // port initial value
+ 512   1        P0FSRH = 0x18;    // P0 selection High
+ 513   1        P0FSRL = 0x10;    // P0 selection Low
+ 514   1      
+ 515   1        // Initialize P1x ports
+ 516   1        PPCLKEN0 |= 0x02; // Enable clock for P1x ports
+ 517   1        P1PU = 0x00;      // pullup
+ 518   1        P1OD = 0x00;      // open drain
+ 519   1        P1IOH = 0xAA;     // direction High
+ 520   1        //P1IOL = 0xAA;     // direction Low
+ 521   1        P1IOL = 0x96;
+ 522   1        P1DB = 0x00;      // debounce
+ 523   1        P1 = 0x00;        // port initial value
+ 524   1        P1FSRH = 0x00;    // P1 selection High
+ 525   1        P1FSRL = 0x00;    // P1 selection Low
+ 526   1      
+ 527   1        // Initialize P2x ports
+ 528   1        PPCLKEN0 |= 0x04; // Enable clock for P2x ports
+ 529   1        P2PU = 0x00;      // pullup
+ 530   1        P2OD = 0x00;      // open drain
+ 531   1        P2IOL = 0xAA;     // direction Low
+ 532   1        P2 = 0x00;        // port initial value
+ 533   1        P2FSRL = 0x00;    // P2 selection Low
+ 534   1      }
 
 
 MODULE INFORMATION:   STATIC OVERLAYABLE
-   CODE SIZE        =   1128    ----
+   CODE SIZE        =   1404    ----
    CONSTANT SIZE    =   ----    ----
-   XDATA SIZE       =     30      38
+   XDATA SIZE       =     42      50
    PDATA SIZE       =   ----    ----
    DATA SIZE        =   ----    ----
    IDATA SIZE       =   ----    ----
@@ -466,4 +573,4 @@ MODULE INFORMATION:   STATIC OVERLAYABLE
 END OF MODULE INFORMATION.
 
 
-C51 COMPILATION COMPLETE.  0 WARNING(S),  0 ERROR(S)
+C51 COMPILATION COMPLETE.  2 WARNING(S),  0 ERROR(S)
