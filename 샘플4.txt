@@ -1,0 +1,138 @@
+//======================================================================
+// 1. 설정값 (시스템 환경에 맞춰 조정 필요)
+//======================================================================
+
+// POT 센서/엔코더에서 읽은 실제 각도 (0.0 ~ 180.0)
+float CurrentPosition = 0.0; 
+
+// 테스트 목표 각도 (60도)
+const float TARGET_POSITION = 60.0;
+
+// 안전을 위한 매우 낮은 P 게인 (시스템 응답을 보며 조정)
+const float Kp_SAFE = 0.5;
+
+// 모터에 인가할 최대 출력 (PWM Duty Cycle 값)
+// Duty Cycle을 가장 낮게 설정 (예: 50)
+const int MAX_SAFE_OUTPUT = 50; 
+
+// PWM 출력 범위를 가정 (예: 0 ~ 1000)
+const int MAX_PWM_VALUE = 1000; 
+
+// 기계적 한계 근처의 안전 버퍼 (60도 근처에서 멈추기 위한 조건)
+const float SAFETY_LIMIT = 59.5;
+
+
+//======================================================================
+// 2. 메인 제어 루프
+//======================================================================
+void main_control_loop()
+{
+    float Error;
+    float P_Output_Raw;
+    int P_Output_PWM;
+    
+    // 이 플래그가 true면 모터는 정지 상태를 유지합니다.
+    static bool is_stopped = false; 
+
+    // 외부 다이얼 입력이 목표 위치를 변경한다고 가정합니다.
+    // 현재는 TARGET_POSITION(60.0) 고정으로 테스트합니다.
+
+    while(1)
+    {
+        // 0. 정지 상태 확인
+        if (is_stopped)
+        {
+            // 정지 플래그가 설정되면 루프를 돌며 0 출력을 유지합니다.
+            Set_Motor_PWM(0);
+            delay_ms(100); 
+            continue; 
+        }
+
+        // 1. 현재 위치 측정 (POT 센서 값을 각도로 변환)
+        CurrentPosition = Read_POT_Sensor_Value(); // 이 함수는 각도(float)를 반환해야 함
+        
+        // 2. 오차 계산
+        Error = TARGET_POSITION - CurrentPosition;
+        
+        // 3. 안전 P-제어 값 계산
+        // P_Output_Raw: 목표를 향해 움직여야 하는 '힘'의 크기
+        P_Output_Raw = Kp_SAFE * Error;
+        
+        // 4. 안전 출력 제한 및 PWM 값 변환
+        
+        // 4-1. 계산된 값을 MAX_SAFE_OUTPUT 내로 제한
+        // 이 단계가 연속 회전을 방지하고 속도를 최소화하는 핵심입니다.
+        if (P_Output_Raw > MAX_SAFE_OUTPUT)
+        {
+            P_Output_PWM = MAX_SAFE_OUTPUT;
+        }
+        else if (P_Output_Raw < -MAX_SAFE_OUTPUT)
+        {
+            P_Output_PWM = -MAX_SAFE_OUTPUT;
+        }
+        else
+        {
+            // float 값을 int PWM 값으로 변환 (단순 변환 가정)
+            P_Output_PWM = (int)P_Output_Raw; 
+        }
+
+        // 5. 조건 검사 (60도 도달) 및 브레이크 발동
+        // 목표 각도 근처(59.5도)에 도달했는지 확인
+        if (CurrentPosition >= SAFETY_LIMIT)
+        {
+            // 6. 조건에 들어오면 브레이크 (강제 정지)
+            Set_Motor_PWM(0); // PWM 0으로 설정하여 모터 정지
+            is_stopped = true; // 플래그를 설정하여 루프를 빠져나가지 않고 0 출력을 유지
+            // 정지 사실을 알림
+            LPUART_SendStr("Motor Stopped at Limit.");
+        }
+        else
+        {
+            // 7. 모터 구동 (안전이 확보된 PWM 출력)
+            // 서보 모터는 방향에 따라 양수/음수 PWM을 다르게 해석해야 합니다.
+            if (P_Output_PWM > 0)
+            {
+                Set_Motor_Forward_PWM(P_Output_PWM);
+            }
+            else if (P_Output_PWM < 0)
+            {
+                // 후진(역방향) 구동 (P_Output_PWM의 절대값을 사용)
+                Set_Motor_Backward_PWM(-P_Output_PWM);
+            }
+            else
+            {
+                 Set_Motor_PWM(0); // 오차가 0에 가까우면 멈춤
+            }
+        }
+        
+        delay_ms(10); // 제어 주기를 설정 (예: 10ms마다 계산)
+    }
+}
+
+//======================================================================
+// 3. 필요한 더미 함수 (실제 MCU 레지스터 코드로 대체 필요)
+//======================================================================
+
+float Read_POT_Sensor_Value()
+{
+    // ADC로 POT 센서 값을 읽고 -> 전압 -> 각도(0.0~180.0)로 변환하는 로직 구현
+    // return (float) (ADC_Read() * 180.0 / ADC_MAX_VALUE);
+    return 0.0; // 임시 반환 값
+}
+
+void Set_Motor_Forward_PWM(int pwm_value)
+{
+    // 모터를 정방향으로 'pwm_value' 크기의 힘으로 구동하는 레지스터 설정 로직 구현
+}
+
+void Set_Motor_Backward_PWM(int pwm_value)
+{
+    // 모터를 역방향으로 'pwm_value' 크기의 힘으로 구동하는 레지스터 설정 로직 구현
+}
+
+void Set_Motor_PWM(int pwm_value)
+{
+    // 모터를 정지 (Set_Motor_Forward_PWM(0); Set_Motor_Backward_PWM(0);)
+}
+
+// LPUART_SendStr 함수는 기존 코드에서 가져오거나 구현해야 합니다.
