@@ -16,10 +16,13 @@ Linker/Locator:  BL51.exe V6.22.4.0
 Library Manager: LIB51.exe V4.30.1.0
 Hex Converter:   OH51.exe V2.7.0.0
 CPU DLL:         S8051.DLL V3.125.1.0
-Dialog DLL:      DCore51.DLL V2.81.8.0 
+Dialog DLL:      DCore51.DLL V2.81.8.0
+Target DLL:      C:\Program Files (x86)\ABOV Semiconductor\Setup_KEIL_8051_DLL\ABOV_OCD.DLL V2.47.0.0
+Dialog DLL:      TCore51.DLL V2.66.5.0
+ 
 <h2>Project:</h2>
-C:\Users\compro\Documents\abov_work\PID_test\PID_test.uvproj
-Project File Date:  11/07/2025
+D:\work\Abov_PID_test\PID_test.uvproj
+Project File Date:  11/09/2025
 
 <h2>Output:</h2>
 Rebuild target 'Target 1'
@@ -27,27 +30,11 @@ assembling startup.a51...
 compiling main.c...
 compiling A96L116_adc.c...
 linking...
-*** WARNING L1: UNRESOLVED EXTERNAL SYMBOL
-    SYMBOL:  _LPUART_SENDCHAR
-    MODULE:  main.obj (MAIN)
-*** WARNING L1: UNRESOLVED EXTERNAL SYMBOL
-    SYMBOL:  _LPUART_SENDNUM
-    MODULE:  main.obj (MAIN)
-*** WARNING L2: REFERENCE MADE TO UNRESOLVED EXTERNAL
-    SYMBOL:  _LPUART_SENDNUM
-    MODULE:  main.obj (MAIN)
-    ADDRESS: 0AB0H
-*** WARNING L2: REFERENCE MADE TO UNRESOLVED EXTERNAL
-    SYMBOL:  _LPUART_SENDCHAR
-    MODULE:  main.obj (MAIN)
-    ADDRESS: 0AB5H
-*** WARNING L2: REFERENCE MADE TO UNRESOLVED EXTERNAL
-    SYMBOL:  _LPUART_SENDCHAR
-    MODULE:  main.obj (MAIN)
-    ADDRESS: 0ABAH
-Program Size: data=9.1 xdata=37 code=1488
+*** WARNING L16: UNCALLED SEGMENT, IGNORED FOR OVERLAY PROCESS
+    SEGMENT: ?PR?_LPUART_SENDSTR?MAIN
+Program Size: data=9.1 xdata=69 code=1976
 creating hex file from "PID_test"...
-"PID_test" - 0 Error(s), 5 Warning(s).
+"PID_test" - 0 Error(s), 1 Warning(s).
 Build Time Elapsed:  00:00:01
 </pre>
 </body>
